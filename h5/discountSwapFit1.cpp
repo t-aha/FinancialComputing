@@ -10,20 +10,24 @@ prb::discountSwapFit (const std::vector<double> &rSwapRates,
 {
     std::vector<double> tim (rSwapRates.size ());
     std::vector<double> ins (rSwapRates.size ());
-    double tmp = 0.0;
+    double sum = 0.0;
 
     for (size_t i = 0; i < rSwapRates.size (); ++i)
     {
         tim[i] = dInitialTime + (i+1) * dPeriod;
 
-        tmp *= rSwapRates [i];
-        ins[i] = (1 -tmp) / (1 + rSwapRates[i]*dPeriod);
-        tmp = tmp / rSwapRates[i] + dPeriod*ins [i];
+        if (i == 0) {
+            ins[0] = 1/(1+dPeriod*rSwapRates[0]);
+            continue;
+        }
+        sum += ins[i-1];
+        ins[i] = (1-sum*rSwapRates[i]*dPeriod)/(1+dPeriod*rSwapRates[i]);
+        
     }
     
     std::transform(ins.begin(), ins.end(), tim.begin(), ins.begin(),
                    [dInitialTime](double rate, double t) 
-                   { return log(rate) / (t - dInitialTime); });
+                   { return -log(rate) / (t - dInitialTime); });
     
     rFit.assign (tim.begin (), tim.end (), ins.begin());
     
