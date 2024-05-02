@@ -6,116 +6,118 @@
 using namespace cfl;
 using namespace std;
 
-class Chain : public IGaussRollback {
+class ChainFit : public IGaussRollback
+{
 public:
-    Chain(const unsigned iExplSteps, 
-            const cfl::GaussRollback &rFast,
-            unsigned iImplSteps, double dExplP,
-            double dImplP) 
-        : n_expl (iExplSteps), fast (rFast), n_impl (iImplSteps),
-          explP (dExplP), implP (dImplP) {}
+  ChainFit (unsigned iExplSteps, const cfl::GaussRollback &rFast,
+               unsigned iImplSteps, double dExplP, double dImplP)
+      : n_expl (iExplSteps), n_impl (iImplSteps), fast (rFast),
+        explP (dExplP), implP (dImplP)
+  {
+  }
 
-    Chain(const unsigned iExplSteps, 
-            const cfl::GaussRollback &rFast,
-            unsigned iImplSteps, double dExplP,
-            double dImplP, const unsigned iSize, 
-            const double dH, const double dVar): 
-    Chain(iExplSteps, rFast, iImplSteps, dExplP, dImplP) {
-        Te = 2*dH*dH*dExplP*iExplSteps;
-        Ti = 2*dH*dH*dImplP*iImplSteps;
-        flag = dVar > (Te + Ti);
-        size = iSize;
-        var = dVar;
-        h = dH;
-    }
+  ChainFit (const unsigned iSize, const double dh, const double var,
+               unsigned iExplSteps, const cfl::GaussRollback &rFast,
+               unsigned iImplSteps, double dExplP, double dImplP)
+      : ChainFit (iExplSteps, rFast, iImplSteps, dExplP, dImplP)
+  {
 
-    void rollback (std::valarray<double> &rValues) const {
-        if (flag) {
-            // start w explicit scheme
-            rollback_expl(rValues, explP, n_expl, h, Te);
-            // continue with fast scheme
-            GaussRollback tmp = fast;
-            tmp.assign(size, h, var - (Te + Ti));
-            tmp.rollback(rValues);
-            // finish with implicit scheme
-            rollback_impl(rValues, implP, n_impl, h, Ti);
+    m_var = var;
+    h = dh;
+    Te = 2 * dh * dh * dExplP * iExplSteps;
+    Ti = 2 * dh * dh * dImplP * iImplSteps;
+    flag = (var > Te + Ti);
+    if (flag){fast.assign (iSize, dh, m_var - (Te + Ti));}
+  }
 
-        } else {
-            rollback_expl(rValues, explP, size, h, var);
-        }
-    }
+  ChainFit *
+  newObject (const unsigned iSize, const double dh, const double var) const
+  {
+    return new ChainFit (iSize, dh, var, n_expl, fast,
+                            n_impl, explP, implP);
+  }
 
-    void rollback_expl (std::valarray<double> &rValues, double dP, unsigned imsize, double dH, double dVar) const {
-        std::valarray<double> delta(imsize);
-        int M = ceil(dVar / (2 * dH * dH * dP));
-        double q = dVar / (2 * dH * dH * M);
-        for (int m = 0; m < M; ++m) {
-            for (unsigned int n = 1; n < imsize-1; ++n) {
-                delta[n] = rValues[n-1] - 2*rValues[n]+ rValues[n+1];
-            }
-            delta[0] = delta[1];
-            delta[imsize-1] = delta[imsize-2];
-            rValues = rValues + q*delta;
-        }
-    
-    }
+  void
+  rollback_expl (std::valarray<double> &rValues) const
+  {
+    double q = Te / (2.0 * h * h * n_expl);
+    size_t N = rValues.size ();
+    std::valarray<double> rDelta (N);
+    for (size_t m = 0; m < n_expl; ++m)
+      {
+        for (size_t n = 1; n < N - 1; ++n)
+          {
+            rDelta[n] = rValues[n - 1] - 2 * rValues[n] + rValues[n + 1];
+          }
+        rDelta[0] = rDelta[1];
+        rDelta[N - 1] = rDelta[N - 2];
 
-    void rollback_impl (std::valarray<double> &rValues, double dP, unsigned imsize, double dH, double dVar) const {
-        int M = ceil(dVar / (2 * dH * dH * dP));
-        size_t N = imsize;
-        for (int m = 0; m < M; ++m) {
-            // Define the tridiagonal matrix coefficients
-            gsl_vector *diag = gsl_vector_alloc(N);
-            gsl_vector *sup = gsl_vector_alloc(N - 1);
-            gsl_vector *sub = gsl_vector_alloc(N - 1);
+        rValues += q * rDelta;
+      }
+  }
 
-            // Define the right-hand side vector
-            gsl_vector *b = gsl_vector_alloc(N);
+  void
+  rollback_impl (std::valarray<double> &rValues) const
+  {
+    double q = Ti / (2.0 * h * h * n_impl);
+    size_t N = rValues.size ();
+    gsl_vector *diag = gsl_vector_alloc (N);
+    gsl_vector *sub = gsl_vector_alloc (N - 1);
 
-            // Initialize the tridiagonal matrix coefficients and the right-hand side vector
-            for (size_t i = 0; i < N; ++i) {
-                gsl_vector_set(diag, i, 1 + 2 * dP);
-                gsl_vector_set(b, i, rValues[i]);
-            }
-            for (size_t i = 0; i < N - 1; ++i) {
-                gsl_vector_set(sup, i, -dP);
-                gsl_vector_set(sub, i, -dP);
-            }
+    for (size_t i = 0; i < N; ++i)
+      {
+        gsl_vector_set (diag, i, 1 + 2 * q);
+        if (i < N - 1)
+          {
+            gsl_vector_set (sub, i, -q);
+          }
+      }
 
-            // Allocate memory for the solution vector
-            gsl_vector *x = gsl_vector_alloc(N);
+    gsl_vector *b = gsl_vector_alloc(N);
+    gsl_vector *x = gsl_vector_alloc(N);
+    gsl_vector_view rV_view = gsl_vector_view_array (&rValues[0], N);
+    gsl_vector_memcpy(b, &rV_view.vector);
 
-            // Solve the tridiagonal linear system
-            gsl_linalg_solve_tridiag(diag, sup, sub, b, x);
+    for (size_t j = 0; j < n_impl; ++j)
+      {
+        gsl_linalg_solve_tridiag (diag, sub, sub, b, x);
+        gsl_vector_memcpy (b, x);
+      }
 
-            // Update rValues with the solution
-            for (size_t i = 0; i < N; ++i) {
-                rValues[i] = gsl_vector_get(x, i);
-            }
+    gsl_vector_memcpy (&rV_view.vector, x);
 
-            // Free allocated memory
-            gsl_vector_free(diag);
-            gsl_vector_free(sup);
-            gsl_vector_free(sub);
-            gsl_vector_free(b);
-            gsl_vector_free(x);
-        }
-    }
+    gsl_vector_free (b);
+    gsl_vector_free (x);
+    gsl_vector_free (diag);
+    gsl_vector_free (sub);
+  }
 
-    IGaussRollback *
-    newObject(const unsigned iSize, const double dH, const double dVar)  const {
-        return new Chain(n_expl, fast, n_impl, explP, implP, iSize, dH, dVar);
-    }
+  void
+  rollback (std::valarray<double> &rValues) const
+  {
+    if (m_var > Te + Ti)
+      {
+        rollback_expl (rValues);
+        fast.rollback (rValues);
+        rollback_impl (rValues);
+      }
+    else
+      {
+        rollback_expl (rValues);
+      }
+  }
 
 private:
-    bool flag;
-    unsigned n_expl, n_impl, size;
-    cfl::GaussRollback fast;
-    double explP, implP, Te, Ti, var, h;
+  bool flag;
+  unsigned n_expl, n_impl;
+  cfl::GaussRollback fast;
+  double explP, implP, Te, Ti, m_var, h;
 };
 
-cfl::GaussRollback prb::chain(unsigned iExplSteps, const cfl::GaussRollback &rFast,
-                          unsigned iImplSteps, double dExplP, double dImplP) {
-    return GaussRollback(new Chain(iExplSteps, rFast, iImplSteps, dExplP, dImplP));
+cfl::GaussRollback
+prb::chain (unsigned iExplSteps, const cfl::GaussRollback &rFast,
+            unsigned iImplSteps, double dExplP, double dImplP)
+{
+  return GaussRollback (
+      new ChainFit (iExplSteps, rFast, iImplSteps, dExplP, dImplP));
 }
-

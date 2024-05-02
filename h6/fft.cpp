@@ -1,52 +1,69 @@
-#include "home6/home6.hpp"
-#include <gsl/gsl_matrix.h>
 #include "cfl/GaussRollback.hpp"
-
+#include "home6/home6.hpp"
+#include <cmath>
+#include <gsl/gsl_fft_halfcomplex.h>
+#include <gsl/gsl_fft_real.h>
 using namespace cfl;
 using namespace std;
 
-class FFT : public IGaussRollback {
+class FFT : public IGaussRollback
+{
 public:
-    FFT() {}
+  FFT () {}
 
-    FFT(const unsigned iSize, const double dH, const double dVar): 
-    FFT() {
+  FFT (const unsigned iSize, const double dH, const double dVar)
+      : FFT ()
+  {
+    dF = dVar / (dH * dH);
+  }
 
-        int M = static_cast<int>(dVar / (2 * dH * dH));
-        double q = dVar / (2 * dH * dH * M);
-        
-        this->M = M;
-        this->q = q;
-    }
+  FFT *newObject (const unsigned iSize, const double dH, const double dVar) const
+  {
+    return new FFT(iSize, dH, dVar);
+  }
 
-    void rollback (std::valarray<double> &rValues) const {
-        int N = rValues.size();
-        std::valarray<double> delta(N);
-        
-        for (int n = 1; n < N - 1; ++n) {
-            delta[n] = rValues[n - 1] - 2 * rValues[n] + rValues[n + 1];
-        }
+  void rollback (std::valarray<double> &rValues) const {
+    size_t n = rValues.size ();
+    double *coeffs = new double[n];
+    rValues *= n;   
+    std::copy (std::begin (rValues), std::end (rValues), coeffs);
 
-        delta[0] = delta[1];
-        delta[N - 1] = delta[N - 2];
+    gsl_fft_real_workspace *w = gsl_fft_real_workspace_alloc(n);
+    gsl_fft_real_wavetable *wt = gsl_fft_real_wavetable_alloc(n);
+    gsl_fft_real_transform(coeffs, 1, n, wt, w);
 
-        for (int n = 0; n < N; ++n) {
-            rValues[n] += q * delta[n];
-        }
-    }
+    for (size_t i = 1; i < (n+1)/2; ++i)
+      {
+        double tmp = exp((-2*M_PI*M_PI*i*i*dF) / (n*n));
+        coeffs[2*i] *= tmp;
+        coeffs[2*i-1] *= tmp;
+      }
+    if (n % 2 == 0)
+      {
+        int k = n/2;
+        coeffs[n-1] *= exp (-2*M_PI*M_PI*k*k*dF) / (n*n);
+      }
 
-    IGaussRollback *
-    newObject(const unsigned iSize, const double dH, const double dVar)  const {
-        return new FFT(iSize, dH, dVar);
-    }
+    gsl_fft_halfcomplex_wavetable *hc = gsl_fft_halfcomplex_wavetable_alloc (n);
+    gsl_fft_halfcomplex_inverse(coeffs, 1, n, hc, w);
+
+    for (size_t j = 0; j < n; ++j) 
+      {
+        rValues[j] = coeffs[j]/n;
+      }
+
+    gsl_fft_real_wavetable_free(wt);
+    gsl_fft_halfcomplex_wavetable_free(hc);
+    gsl_fft_real_workspace_free(w);
+    delete[] coeffs;
+  }
 
 private:
-    double p;
-    int M;
-    double q;
+  double dF;
 };
 
-cfl::GaussRollback prb::fft() {
-    return GaussRollback(new FFT());
+cfl::GaussRollback
+prb::fft ()
+{
+  return GaussRollback (new FFT ());
 }
-
